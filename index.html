@@ -1,56 +1,367 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Vermont Forestry Chat</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>VT Woods App</title>
   <style>
-    body {
-      font-family: sans-serif;
-      max-width: 700px;
-      margin: 40px auto;
+    :root{
+      /* Match vtwoods.xyz (Google Sites default page background) */
+      --bg: #ffffff;
+      --text: #111111;
+      --muted: #555555;
+      --border: #d9d9d9;
+
+      --user-bg: #f3f6ff;
+      --asst-bg: #f7f7f7;
+
+      --btn-bg: #111111;
+      --btn-text: #ffffff;
+
+      --radius: 12px;
+      --pad: 14px;
+      --maxw: 720px;
     }
-    textarea {
-      width: 100%;
-      height: 80px;
-      font-size: 16px;
+
+    *{ box-sizing: border-box; }
+    html, body { height: 100%; }
+    body{
+      margin:0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     }
-    button {
-      margin-top: 10px;
-      padding: 8px 14px;
-      font-size: 16px;
+
+    /* iframe-friendly: no outer margins, center on wide screens, full height */
+    .app{
+      height: 100%;
+      display:flex;
+      flex-direction: column;
+      max-width: var(--maxw);
+      margin: 0 auto;
+      padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
     }
-    #answer {
-      margin-top: 20px;
+
+    header{
+      padding: 12px var(--pad) 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+    h1{
+      margin:0;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: .2px;
+    }
+    .sub{
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.35;
+    }
+
+    .chat{
+      flex: 1 1 auto;
+      overflow:auto;
+      padding: 12px var(--pad);
+      background: var(--bg);
+    }
+
+    .msg{
+      display:flex;
+      gap: 10px;
+      margin: 10px 0;
+      align-items:flex-start;
+    }
+    .badge{
+      width: 30px;
+      height: 30px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      background: #fff;
+      flex: 0 0 auto;
+    }
+    .bubble{
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px 12px;
+      font-size: 14px;
+      line-height: 1.45;
       white-space: pre-wrap;
+      word-wrap: break-word;
+      width: 100%;
+    }
+    .user .bubble{ background: var(--user-bg); }
+    .assistant .bubble{ background: var(--asst-bg); }
+
+    .bubble-top{
+      display:flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items:center;
+      margin-bottom: 8px;
+    }
+    .bubble-title{
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+    }
+    .copybtn{
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      border-radius: 10px;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor:pointer;
+      white-space: nowrap;
+    }
+    .copybtn:active{ transform: translateY(1px); }
+
+    .controls{
+      border-top: 1px solid var(--border);
+      padding: 10px var(--pad);
+      background: var(--bg);
+    }
+    .row{
+      display:flex;
+      gap: 10px;
+      align-items:flex-end;
+    }
+    textarea{
+      width: 100%;
+      resize:none;
+      min-height: 44px;
+      max-height: 160px;
+      padding: 10px 10px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      font-size: 14px;
+      outline:none;
+      background:#fff;
+      color: var(--text);
+    }
+    textarea:focus{
+      border-color:#999;
+    }
+    button.send{
+      min-width: 84px;
+      border: 1px solid var(--btn-bg);
+      background: var(--btn-bg);
+      color: var(--btn-text);
+      border-radius: 12px;
+      padding: 11px 12px;
+      font-weight: 700;
+      cursor:pointer;
+    }
+    button.send:disabled{
+      opacity:.55;
+      cursor:not-allowed;
+    }
+
+    .bar{
+      margin-top: 8px;
+      display:flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items:center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .toggle{
+      display:flex;
+      align-items:center;
+      gap: 8px;
+      user-select:none;
+    }
+    .toggle input{ transform: translateY(1px); }
+
+    .status{
+      font-weight: 600;
     }
   </style>
 </head>
 <body>
+  <div class="app">
+    <header>
+      <h1>VT Woods App</h1>
+      <div class="sub">Vermont-only forestry and forest products assistant.</div>
+    </header>
 
-<h2>Vermont Forestry Utility</h2>
+    <div class="chat" id="chat" aria-live="polite"></div>
 
-<textarea id="question" placeholder="Ask a Vermont forestry question..."></textarea>
-<br />
-<button onclick="ask()">Ask</button>
+    <div class="controls">
+      <div class="row">
+        <textarea id="q" placeholder="Ask a Vermont forestry question…" spellcheck="true"></textarea>
+        <button class="send" id="send">Ask</button>
+      </div>
 
-<div id="answer"></div>
+      <div class="bar">
+        <label class="toggle">
+          <input type="checkbox" id="wantCites" />
+          Request citations
+        </label>
+        <div class="status" id="status">Ready</div>
+      </div>
+    </div>
+  </div>
 
 <script>
-async function ask() {
-  const q = document.getElementById("question").value;
-  const answerDiv = document.getElementById("answer");
-  answerDiv.textContent = "Thinking…";
+  const chat = document.getElementById('chat');
+  const q = document.getElementById('q');
+  const send = document.getElementById('send');
+  const statusEl = document.getElementById('status');
+  const wantCites = document.getElementById('wantCites');
 
-  const res = await fetch("/chat", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message: q })
+  function setBusy(busy){
+    send.disabled = busy;
+    q.disabled = busy;
+    statusEl.textContent = busy ? 'Thinking…' : 'Ready';
+  }
+
+  function addUserMessage(text){
+    const row = document.createElement('div');
+    row.className = 'msg user';
+
+    const badge = document.createElement('div');
+    badge.className = 'badge';
+    badge.textContent = 'You';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    bubble.textContent = text;
+
+    row.appendChild(badge);
+    row.appendChild(bubble);
+    chat.appendChild(row);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function addAssistantMessage(text){
+    const row = document.createElement('div');
+    row.className = 'msg assistant';
+
+    const badge = document.createElement('div');
+    badge.className = 'badge';
+    badge.textContent = 'VT';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+
+    // top bar inside assistant bubble: label + copy button
+    const top = document.createElement('div');
+    top.className = 'bubble-top';
+
+    const title = document.createElement('div');
+    title.className = 'bubble-title';
+    title.textContent = 'Answer';
+
+    const btn = document.createElement('button');
+    btn.className = 'copybtn';
+    btn.type = 'button';
+    btn.textContent = 'Copy';
+    btn.addEventListener('click', async () => {
+      try{
+        await navigator.clipboard.writeText(text);
+        btn.textContent = 'Copied';
+        setTimeout(() => btn.textContent = 'Copy', 900);
+      } catch(e){
+        // Fallback if clipboard is blocked
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        btn.textContent = 'Copied';
+        setTimeout(() => btn.textContent = 'Copy', 900);
+      }
+    });
+
+    top.appendChild(title);
+    top.appendChild(btn);
+
+    const body = document.createElement('div');
+    body.style.whiteSpace = 'pre-wrap';
+    body.style.wordWrap = 'break-word';
+    body.textContent = text;
+
+    bubble.appendChild(top);
+    bubble.appendChild(body);
+
+    row.appendChild(badge);
+    row.appendChild(bubble);
+    chat.appendChild(row);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  async function ask(){
+    const raw = q.value.trim();
+    if(!raw) return;
+
+    addUserMessage(raw);
+    q.value = '';
+    q.style.height = '44px';
+
+    setBusy(true);
+
+    const msg = wantCites.checked
+      ? `${raw}\n\nIf you use citations, include document title plus page/section.`
+      : raw;
+
+    try{
+      const res = await fetch('/chat', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ message: msg })
+      });
+
+      const data = await res.json();
+
+      if(!res.ok || !data.success){
+        addAssistantMessage(`Error: ${data?.error || ('HTTP ' + res.status)}`);
+      } else {
+        addAssistantMessage(data.answer || '(No answer returned)');
+      }
+    } catch(e){
+      addAssistantMessage(`Error: ${e.message || e}`);
+    } finally {
+      setBusy(false);
+      q.focus();
+    }
+  }
+
+  // Autosize textarea
+  q.addEventListener('input', () => {
+    q.style.height = 'auto';
+    q.style.height = Math.min(q.scrollHeight, 160) + 'px';
   });
 
-  const data = await res.json();
-  answerDiv.textContent = data.answer || data.error;
-}
-</script>
+  // Enter sends; Shift+Enter newline
+  q.addEventListener('keydown', (e) => {
+    if(e.key === 'Enter' && !e.shiftKey){
+      e.preventDefault();
+      ask();
+    }
+  });
 
+  send.addEventListener('click', ask);
+
+  // Seed message
+  addAssistantMessage(
+`Ask a Vermont forestry question.
+
+Examples:
+- What do Vermont AMPs require for stream crossings?
+- How do I reduce erosion risk on skid trails in wet conditions?
+- When should I use a portable bridge vs. a culvert in Vermont?`
+  );
+</script>
 </body>
 </html>
