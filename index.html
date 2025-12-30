@@ -6,20 +6,24 @@
   <title>VT Woods App</title>
   <style>
     :root{
-      /* Match vtwoods.xyz (Google Sites default page background) */
-      --bg: #ffffff;
-      --text: #111111;
-      --muted: #555555;
-      --border: #d9d9d9;
+      /* VTWoods site background (from your screenshot) */
+      --bg: #FEE7A6;
 
-      --user-bg: #f3f6ff;
-      --asst-bg: #f7f7f7;
+      --text: #111111;
+      --muted: rgba(0,0,0,.62);
+      --border: rgba(0,0,0,.16);
+
+      --panel: rgba(255,255,255,.62);
+      --panel-strong: rgba(255,255,255,.80);
+
+      --user-bg: rgba(255,255,255,.60);
+      --asst-bg: rgba(255,255,255,.78);
 
       --btn-bg: #111111;
       --btn-text: #ffffff;
 
-      --radius: 12px;
-      --pad: 14px;
+      --radius: 14px;
+      --pad: 12px;
       --maxw: 720px;
     }
 
@@ -32,7 +36,7 @@
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
     }
 
-    /* iframe-friendly: no outer margins, center on wide screens, full height */
+    /* iframe-friendly: full height, no outside margins */
     .app{
       height: 100%;
       display:flex;
@@ -43,28 +47,21 @@
     }
 
     header{
-      padding: 12px var(--pad) 10px;
-      border-bottom: 1px solid var(--border);
-      background: var(--bg);
+      padding: 14px var(--pad) 10px;
+      background: transparent;
     }
     h1{
       margin:0;
-      font-size: 18px;
-      font-weight: 700;
+      font-size: 20px;
+      font-weight: 800;
       letter-spacing: .2px;
-    }
-    .sub{
-      margin-top: 6px;
-      color: var(--muted);
-      font-size: 12.5px;
-      line-height: 1.35;
     }
 
     .chat{
       flex: 1 1 auto;
       overflow:auto;
-      padding: 12px var(--pad);
-      background: var(--bg);
+      padding: 10px var(--pad);
+      background: transparent;
     }
 
     .msg{
@@ -74,28 +71,32 @@
       align-items:flex-start;
     }
     .badge{
-      width: 30px;
-      height: 30px;
-      border-radius: 10px;
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
       border: 1px solid var(--border);
       display:flex;
       align-items:center;
       justify-content:center;
       font-size: 12px;
-      font-weight: 700;
-      color: var(--muted);
-      background: #fff;
+      font-weight: 800;
+      color: rgba(0,0,0,.65);
+      background: var(--panel);
       flex: 0 0 auto;
+      backdrop-filter: blur(3px);
     }
+
     .bubble{
       border: 1px solid var(--border);
       border-radius: var(--radius);
       padding: 12px 12px;
-      font-size: 14px;
+      font-size: 14.5px;
       line-height: 1.45;
       white-space: pre-wrap;
       word-wrap: break-word;
       width: 100%;
+      background: var(--panel-strong);
+      backdrop-filter: blur(3px);
     }
     .user .bubble{ background: var(--user-bg); }
     .assistant .bubble{ background: var(--asst-bg); }
@@ -110,13 +111,13 @@
     .bubble-title{
       font-size: 12px;
       color: var(--muted);
-      font-weight: 600;
+      font-weight: 700;
     }
     .copybtn{
       border: 1px solid var(--border);
-      background: #fff;
+      background: rgba(255,255,255,.75);
       color: var(--text);
-      border-radius: 10px;
+      border-radius: 12px;
       padding: 6px 10px;
       font-size: 12px;
       cursor:pointer;
@@ -127,7 +128,8 @@
     .controls{
       border-top: 1px solid var(--border);
       padding: 10px var(--pad);
-      background: var(--bg);
+      background: rgba(255,255,255,.35);
+      backdrop-filter: blur(4px);
     }
     .row{
       display:flex;
@@ -137,27 +139,27 @@
     textarea{
       width: 100%;
       resize:none;
-      min-height: 44px;
+      min-height: 46px;
       max-height: 160px;
-      padding: 10px 10px;
-      border-radius: 12px;
+      padding: 11px 12px;
+      border-radius: 14px;
       border: 1px solid var(--border);
-      font-size: 14px;
+      font-size: 14.5px;
       outline:none;
-      background:#fff;
+      background: rgba(255,255,255,.85);
       color: var(--text);
     }
     textarea:focus{
-      border-color:#999;
+      border-color: rgba(0,0,0,.35);
     }
     button.send{
-      min-width: 84px;
+      min-width: 90px;
       border: 1px solid var(--btn-bg);
       background: var(--btn-bg);
       color: var(--btn-text);
-      border-radius: 12px;
-      padding: 11px 12px;
-      font-weight: 700;
+      border-radius: 14px;
+      padding: 12px 14px;
+      font-weight: 800;
       cursor:pointer;
     }
     button.send:disabled{
@@ -172,7 +174,7 @@
       gap: 12px;
       align-items:center;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 12.5px;
     }
     .toggle{
       display:flex;
@@ -183,7 +185,7 @@
     .toggle input{ transform: translateY(1px); }
 
     .status{
-      font-weight: 600;
+      font-weight: 700;
     }
   </style>
 </head>
@@ -191,7 +193,6 @@
   <div class="app">
     <header>
       <h1>VT Woods App</h1>
-      <div class="sub">Vermont-only forestry and forest products assistant.</div>
     </header>
 
     <div class="chat" id="chat" aria-live="polite"></div>
@@ -254,7 +255,6 @@
     const bubble = document.createElement('div');
     bubble.className = 'bubble';
 
-    // top bar inside assistant bubble: label + copy button
     const top = document.createElement('div');
     top.className = 'bubble-top';
 
@@ -272,7 +272,6 @@
         btn.textContent = 'Copied';
         setTimeout(() => btn.textContent = 'Copy', 900);
       } catch(e){
-        // Fallback if clipboard is blocked
         const ta = document.createElement('textarea');
         ta.value = text;
         document.body.appendChild(ta);
@@ -288,8 +287,6 @@
     top.appendChild(btn);
 
     const body = document.createElement('div');
-    body.style.whiteSpace = 'pre-wrap';
-    body.style.wordWrap = 'break-word';
     body.textContent = text;
 
     bubble.appendChild(top);
@@ -301,18 +298,46 @@
     chat.scrollTop = chat.scrollHeight;
   }
 
+  // Robustly parse server responses (handles JSON or plain text)
+  async function parseResponse(res){
+    const raw = await res.text();
+
+    // Try JSON first
+    try{
+      const data = JSON.parse(raw);
+
+      // Accept multiple backend shapes
+      // 1) { success:true, answer:"..." }
+      // 2) { answer:"..." }
+      // 3) { output:"..." } or { message:"..." }
+      if (typeof data.answer === 'string') return { ok: true, answer: data.answer };
+      if (typeof data.output === 'string') return { ok: true, answer: data.output };
+      if (typeof data.message === 'string') return { ok: true, answer: data.message };
+
+      if (data.success === false) {
+        return { ok: false, error: data.error || 'Unknown error' };
+      }
+
+      // Fall back to showing the whole JSON if it’s something unexpected
+      return { ok: true, answer: raw };
+    } catch(e){
+      // Not JSON: treat as plain text
+      return { ok: res.ok, answer: raw || ('HTTP ' + res.status) };
+    }
+  }
+
   async function ask(){
     const raw = q.value.trim();
     if(!raw) return;
 
     addUserMessage(raw);
     q.value = '';
-    q.style.height = '44px';
+    q.style.height = '46px';
 
     setBusy(true);
 
     const msg = wantCites.checked
-      ? `${raw}\n\nIf you use citations, include document title plus page/section.`
+      ? `${raw}\n\nProvide citations (document title + page/section) in this response.`
       : raw;
 
     try{
@@ -322,12 +347,15 @@
         body: JSON.stringify({ message: msg })
       });
 
-      const data = await res.json();
+      const parsed = await parseResponse(res);
 
-      if(!res.ok || !data.success){
-        addAssistantMessage(`Error: ${data?.error || ('HTTP ' + res.status)}`);
+      if(!res.ok){
+        addAssistantMessage(`Error: HTTP ${res.status}`);
+      } else if(!parsed.ok){
+        addAssistantMessage(`Error: ${parsed.error}`);
       } else {
-        addAssistantMessage(data.answer || '(No answer returned)');
+        const ans = (parsed.answer || '').trim();
+        addAssistantMessage(ans || '(No answer returned)');
       }
     } catch(e){
       addAssistantMessage(`Error: ${e.message || e}`);
