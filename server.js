@@ -18,64 +18,124 @@ const PORT = process.env.PORT || 8000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const VECTOR_STORE_ID = process.env.VECTOR_STORE_ID || '';
 
-// Koyeb/Google Sites iframe embedding: allow being framed
-// (Google Sites typically frames your URL. If blocked, it won't render.)
+/**
+ * Allow embedding in Google Sites + vtwoods.xyz
+ * Note: X-Frame-Options: ALLOWALL is non-standard but harmless; CSP is the real control.
+ */
 app.use((req, res, next) => {
-  // Allow embedding from vtwoods.xyz and Google Sites
   res.setHeader(
     'Content-Security-Policy',
     "frame-ancestors 'self' https://*.google.com https://sites.google.com https://www.vtwoods.xyz https://vtwoods.xyz"
   );
-  // Avoid legacy frame blocking
   res.setHeader('X-Frame-Options', 'ALLOWALL');
   next();
 });
 
-// Serve your static front-end
+// Serve static front-end from repo root (index.html lives here)
 app.use(express.static(path.join(__dirname), { extensions: ['html'] }));
 
+// --- REQUIRED BEHAVIOR STRINGS ---
 function outOfScope() {
+  // MUST MATCH EXACTLY
   return "Your request is beyond the scope and purpose of this app.";
-}
-
-function isInScope(message) {
-  // STRICT Vermont forestry scope gate.
-  // If you want tighter/looser, say so and I’ll adjust.
-  const m = (message || '').toLowerCase();
-
-  // quick allowlist hints (VT + forestry related)
-  const allow = [
-    'vermont', 'vt ', ' vt', 'amps', 'acceptable management practice',
-    'logging', 'forestry', 'silviculture', 'forest products', 'skid trail',
-    'stream crossing', 'culvert', 'waterbar', 'turnout', 'erosion', 'rutting',
-    'landing', 'haul road', 'timber', 'harvest', 'felling', 'forwarder',
-    'skidder', 'sawmill', 'forest action plan', 'fia'
-  ];
-
-  // If it mentions Vermont explicitly, assume in-scope unless obviously unrelated.
-  if (m.includes('vermont') || m.includes(' vt')) return true;
-
-  // Otherwise must hit multiple allow terms to reduce “general questions” slipping in.
-  let hits = 0;
-  for (const k of allow) if (m.includes(k)) hits++;
-  return hits >= 2;
-}
-
-function isSoilsQuestion(message) {
-  const m = (message || '').toLowerCase();
-  return m.includes('soil') || m.includes('soils') || m.includes('soil type') || m.includes('drainage');
 }
 
 function soilsRedirect() {
   return "For soils questions, use the official soil map tool (Web Soil Survey) for your specific location.";
 }
 
+// --- INTENT DETECTORS ---
+function isSoilsQuestion(message) {
+  const m = (message || '').toLowerCase();
+  // broad on purpose: any soils/drainage/site-index style question should go to WSS
+  return /\bsoil(s)?\b/.test(m) || m.includes('drainage') || m.includes('site index');
+}
+
+function asksAuthorshipOrFeedback(message) {
+  const m = (message || '').toLowerCase();
+  return (
+    m.includes('who wrote') ||
+    m.includes('who made') ||
+    m.includes('who built') ||
+    m.includes('who created') ||
+    m.includes('feedback') ||
+    m.includes('suggestion') ||
+    m.includes('feature request') ||
+    m.includes('contact') ||
+    m.includes('email') ||
+    m.includes('developer')
+  );
+}
+
+/**
+ * Vermont-only forestry scope gate.
+ *
+ * Key change vs your previous version:
+ * - Do NOT require "vermont" to appear in the user's question.
+ * - Do NOT require 2+ keyword hits.
+ * - Instead, allow if it matches any Vermont-forestry topic signal,
+ *   OR if it explicitly mentions Vermont/VT.
+ */
+function isInScope(message) {
+  const m = (message || '').toLowerCase().trim();
+  if (!m) return true;
+
+  // If they explicitly mention Vermont/VT, treat as in-scope unless clearly unrelated.
+  // (We still keep a tiny “obviously unrelated” blocklist.)
+  if (/\bvermont\b/.test(m) || /\bvt\b/.test(m)) {
+    const obviouslyUnrelated = [
+      'recipe', 'dating', 'movie', 'tv show', 'bitcoin', 'stock', 'fantasy football',
+      'porn', 'celebrity', 'astrology', 'horoscope'
+    ];
+    for (const w of obviouslyUnrelated) {
+      if (m.includes(w)) return false;
+    }
+    return true;
+  }
+
+  // Topic signals (forestry + water quality + climate adaptation + forest products industry + VT programs/docs)
+  // This list is intentionally broad and practical.
+  const topicSignals = [
+    // VT AMPs & water quality
+    'amp', 'acceptable management practice', 'waterbar', 'turnout', 'broad-based dip',
+    'stream crossing', 'crossing', 'culvert', 'bridge', 'portable bridge',
+    'silt fence', 'seed', 'mulch', 'stabilization', 'erosion', 'sediment', 'rut', 'rutting',
+    'ditch', 'drainage', 'buffer', 'riparian', 'wetland',
+
+    // Forestry operations & silviculture
+    'silviculture', 'silvicultural', 'regeneration', 'thinning', 'clearcut', 'shelterwood',
+    'selection', 'group selection', 'patch cut', 'release', 'crop tree', 'marking',
+    'basal area', 'tpa', 'qmd', 'stand improvement',
+    'harvest', 'timber', 'logging', 'skid trail', 'landing', 'haul road', 'forest road',
+    'forwarder', 'skidder', 'feller-buncher', 'processor', 'chainsaw',
+
+    // Vermont forests & climate adaptation
+    'climate adaptation', 'resilience', 'invasive', 'invasive species', 'deer browse',
+    'drought', 'flood', 'ice storm', 'windthrow', 'blowdown',
+
+    // Forest products industry
+    'sawmill', 'mill', 'lumber', 'pulp', 'biomass', 'firewood', 'chips', 'pellets',
+    'log market', 'stumpage', 'delivered', 'scale', 'board feet', 'cord',
+
+    // Vermont-specific data/initiatives named in your sources list
+    'forest action plan', 'fia', 'forest inventory', 'analysis', 'tree owner',
+    'tree owner’s manual', 'tree owners manual'
+  ];
+
+  for (const s of topicSignals) {
+    if (m.includes(s)) return true;
+  }
+
+  // Otherwise out of scope
+  return false;
+}
+
 const client = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
-// Simple health endpoint for Koyeb
+// Health endpoint for Koyeb
 app.get('/health', (req, res) => res.status(200).send('ok'));
 
-// Chat endpoint your UI calls
+// Chat endpoint used by your UI
 app.post('/chat', async (req, res) => {
   try {
     const message = (req.body && req.body.message) ? String(req.body.message) : '';
@@ -85,33 +145,25 @@ app.post('/chat', async (req, res) => {
       return res.json({ success: true, answer: "Ask a Vermont forestry question." });
     }
 
-    if (isSoilsQuestion(message)) {
-      return res.json({ success: true, answer: soilsRedirect() });
-    }
-
-    if (!isInScope(message)) {
-      return res.json({ success: true, answer: outOfScope() });
-    }
-
-    // “who wrote this / feedback” behavior you specified
-    const m = message.toLowerCase();
-    const asksAuthorshipOrFeedback =
-      m.includes('who wrote') ||
-      m.includes('who made') ||
-      m.includes('who built') ||
-      m.includes('feedback') ||
-      m.includes('suggestion') ||
-      m.includes('feature request') ||
-      m.includes('contact') ||
-      m.includes('email');
-
-    if (asksAuthorshipOrFeedback) {
+    // feedback/author questions: respond with your exact desired line
+    if (asksAuthorshipOrFeedback(message)) {
       return res.json({
         success: true,
         answer: "Please contact the developer with your questions or feedback (steve@northeastforests.com)."
       });
     }
 
+    // soils questions: always redirect to official tool
+    if (isSoilsQuestion(message)) {
+      return res.json({ success: true, answer: soilsRedirect() });
+    }
+
+    // scope gate
+    if (!isInScope(message)) {
+      return res.json({ success: true, answer: outOfScope() });
+    }
+
+    // Server config checks
     if (!client) {
       return res.status(500).json({
         success: false,
@@ -125,17 +177,19 @@ app.post('/chat', async (req, res) => {
       });
     }
 
-    // Use Responses API + file_search tool with your vector store.
-    // (This keeps answers grounded in your uploaded PDFs.)
+    // System instructions (your spec)
     const instructions = [
       "You are the VT Woods App.",
-      "You answer only Vermont forestry and Vermont forest products industry questions, using ONLY the provided documents in the vector store.",
+      "You are a Vermont-only forestry and forest products industry assistant.",
+      "Use ONLY the provided documents in the vector store. Do not use outside knowledge.",
       "If the user asks anything out of scope, respond with exactly: “Your request is beyond the scope and purpose of this app.”",
-      "Use precise terminology. Say “forest products industry” (not “forestry industry”).",
-      "Avoid speculation. Provide practical, field-ready steps/checklists when supported by the documents.",
-      "Ask at most one clarifying question if needed.",
-      "Only provide citations if the user explicitly requests them.",
-      "If citations are requested, cite document title and page/section when possible."
+      "Use precise terminology. Use “forest products industry” (not “forestry industry”).",
+      "Avoid speculation or nontechnical language.",
+      "Ask at most one clarifying question when needed.",
+      "Provide practical, field-ready outputs (steps, checklists, decision rules) only when supported by the documents.",
+      "For soils-related questions, the app must refer the user to the official soil map tool (Web Soil Survey).",
+      "Only provide citations when explicitly requested.",
+      "If citations are requested, cite document titles and relevant sections/pages when possible."
     ].join("\n");
 
     const response = await client.responses.create({
@@ -150,7 +204,7 @@ app.post('/chat', async (req, res) => {
       }],
     });
 
-    // Extract text
+    // Extract model text safely
     let answerText = '';
     if (response.output && Array.isArray(response.output)) {
       for (const item of response.output) {
@@ -161,14 +215,14 @@ app.post('/chat', async (req, res) => {
         }
       }
     }
-    answerText = answerText.trim() || "No answer returned.";
+    answerText = (answerText || '').trim() || "No answer returned.";
 
-    // Citations only if requested
-    let citations = [];
+    // Citations only if requested (pass through annotations if present)
+    let citations;
     if (wantCitations) {
-      // Newer responses can contain annotations; keep this simple:
-      // Return whatever the API gives us in a safe envelope.
-      citations = response.output?.[0]?.content?.[0]?.annotations || [];
+      const firstMsg = (response.output || []).find(x => x.type === 'message');
+      const firstText = firstMsg?.content?.find(c => c.type === 'output_text');
+      citations = firstText?.annotations || [];
     }
 
     return res.json({
@@ -184,7 +238,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// IMPORTANT: Listen on PORT (Koyeb injects this); never hardcode 3000 on hosting.
+// IMPORTANT: listen on injected PORT for hosting
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
