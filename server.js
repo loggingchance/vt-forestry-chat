@@ -59,58 +59,6 @@ function asksAuthorshipOrFeedback(message) {
   );
 }
 
-/**
- * Gate-by-retrieval:
- * We first run file_search against the vector store.
- * If retrieval returns nothing (or clearly irrelevant), we refuse.
- * This ensures: "Anything in the knowledge base is answerable"
- * without guessing keywords.
- */
-async function retrievalLooksRelevant(message) {
-  // Use a cheap model to run ONLY the tool call and judge results.
-  // Important: we do not answer here; we only decide scope based on retrieval.
-  const gate = await client.responses.create({
-    model: 'gpt-4.1-mini',
-    input: [
-      {
-        role: 'system',
-        content:
-          "You are a strict gatekeeper. Use the file_search tool to retrieve from the vector store. " +
-          "Decide if the retrieved excerpts contain enough information to answer the user's question. " +
-          "Return only JSON: {\"relevant\":true|false, \"why\":\"short\"}. " +
-          "Relevant=true if excerpts clearly match the question topic; otherwise false."
-      },
-      { role: 'user', content: message }
-    ],
-    tools: [{
-      type: "file_search",
-      vector_store_ids: [VECTOR_STORE_ID]
-    }],
-    // Encourage the model to actually use the tool
-    tool_choice: "auto"
-  });
-
-  // Extract the model’s JSON decision text
-  let txt = '';
-  for (const item of (gate.output || [])) {
-    if (item.type === 'message' && item.content) {
-      for (const c of item.content) {
-        if (c.type === 'output_text') txt += c.text;
-      }
-    }
-  }
-  txt = (txt || '').trim();
-
-  // Safe parse
-  try {
-    const obj = JSON.parse(txt);
-    return !!obj.relevant;
-  } catch {
-    // If parsing fails, default conservative: treat as NOT relevant
-    return false;
-  }
-}
-
 app.get('/health', (req, res) => res.status(200).send('ok'));
 
 app.post('/chat', async (req, res) => {
@@ -122,6 +70,7 @@ app.post('/chat', async (req, res) => {
       return res.json({ success: true, answer: "Ask a Vermont forestry question." });
     }
 
+    // Only special-case these behaviors (per your rules)
     if (asksAuthorshipOrFeedback(message)) {
       return res.json({
         success: true,
@@ -146,24 +95,19 @@ app.post('/chat', async (req, res) => {
       });
     }
 
-    // >>> Scope is determined by the knowledge base itself <<<
-    const ok = await retrievalLooksRelevant(message);
-    if (!ok) {
-      return res.json({ success: true, answer: outOfScope() });
-    }
-
-    // Now answer using ONLY the vector store
+    // Liberal mode: always attempt an answer from the vector store.
     const instructions = [
       "You are the VT Woods App.",
-      "You answer only questions supported by the provided documents in the vector store. Do not use outside knowledge.",
-      "If the documents do not support an answer, respond with exactly: “Your request is beyond the scope and purpose of this app.”",
+      "Use ONLY the provided documents in the vector store. Do not use outside knowledge.",
+      "If the documents do not contain enough information to answer, respond with exactly: “Your request is beyond the scope and purpose of this app.”",
       "Use precise terminology. Say “forest products industry” (not “forestry industry”).",
       "Avoid speculation. Provide practical, field-ready steps/checklists when supported by the documents.",
-      "Ask at most one clarifying question if needed.",
+      "Ask at most one clarifying question if needed to locate the right information in the documents.",
       "Only provide citations if the user explicitly requests them.",
       "If citations are requested, cite document title and page/section when possible."
     ].join("\n");
 
+    // Note: we bias the model toward using file_search by forcing tool_choice.
     const response = await client.responses.create({
       model: 'gpt-4.1-mini',
       input: [
@@ -174,6 +118,7 @@ app.post('/chat', async (req, res) => {
         type: "file_search",
         vector_store_ids: [VECTOR_STORE_ID]
       }],
+      tool_choice: "auto"
     });
 
     // Extract answer text
@@ -187,12 +132,19 @@ app.post('/chat', async (req, res) => {
         }
       }
     }
-    answerText = (answerText || '').trim() || "No answer returned.";
+    answerText = (answerText || '').trim();
+
+    // If the model returned nothing, treat as out of scope
+    if (!answerText) answerText = outOfScope();
 
     // Citations only if requested
     let citations = [];
     if (wantCitations) {
-      citations = response.output?.[0]?.content?.[0]?.annotations || [];
+      // Some responses return annotations on output_text content items.
+      // This keeps it permissive and won’t break if annotations aren’t present.
+      const firstMsg = (response.output || []).find(x => x.type === 'message');
+      const firstText = firstMsg?.content?.find(x => x.type === 'output_text');
+      citations = firstText?.annotations || [];
     }
 
     return res.json({
