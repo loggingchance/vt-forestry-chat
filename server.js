@@ -1,179 +1,190 @@
+'use strict';
 
-import express from "express";
-import dotenv from "dotenv";
-import OpenAI from "openai";
-
+const path = require('path');
+const express = require('express');
+const dotenv = require('dotenv');
 dotenv.config();
 
+const OpenAI = require('openai');
+
 const app = express();
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-// Serve index.html and other static files in the project folder
-app.use(express.static("."));
+// --- CONFIG ---
+const PORT = process.env.PORT || 8000;
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+// Set these on Koyeb "Environment variables"
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+const VECTOR_STORE_ID = process.env.VECTOR_STORE_ID || '';
+
+// Koyeb/Google Sites iframe embedding: allow being framed
+// (Google Sites typically frames your URL. If blocked, it won't render.)
+app.use((req, res, next) => {
+  // Allow embedding from vtwoods.xyz and Google Sites
+  res.setHeader(
+    'Content-Security-Policy',
+    "frame-ancestors 'self' https://*.google.com https://sites.google.com https://www.vtwoods.xyz https://vtwoods.xyz"
+  );
+  // Avoid legacy frame blocking
+  res.setHeader('X-Frame-Options', 'ALLOWALL');
+  next();
 });
 
-// REQUIRED for deployment: set this in your host (Render) environment variables
-const VECTOR_STORE_ID = process.env.VECTOR_STORE_ID;
-if (!VECTOR_STORE_ID) {
-  throw new Error("Missing VECTOR_STORE_ID environment variable.");
+// Serve your static front-end
+app.use(express.static(path.join(__dirname), { extensions: ['html'] }));
+
+function outOfScope() {
+  return "Your request is beyond the scope and purpose of this app.";
 }
 
-// Exact required strings
-const REFUSAL = "Your request is beyond the scope and purpose of this app.";
-const SOIL_TOOL_LINE =
-  "For soils in Vermont, use the official soil map tool: https://casoilresource.lawr.ucdavis.edu/gmap/.";
-const DEVELOPER_LINE =
-  "Please contact the developer with your questions or feedback (steve@northeastforests.com).";
+function isInScope(message) {
+  // STRICT Vermont forestry scope gate.
+  // If you want tighter/looser, say so and I’ll adjust.
+  const m = (message || '').toLowerCase();
 
-// Allowed sources list (titles, as the model should refer to them)
-const ALLOWED_SOURCES_TEXT = `
-Authoritative sources for this app (use only these):
-- Vermont AMP Guide
-- 2017 Vermont Forest Action Plan
-- Silvicultural Guides
-- Tree Owner’s Manual
-- Steven Bick publications
-- Vermont FIA Data
-- Combined Culvert Information
-- USDA Forest Service manuals (e.g., Wood Handbook)
-`.trim();
+  // quick allowlist hints (VT + forestry related)
+  const allow = [
+    'vermont', 'vt ', ' vt', 'amps', 'acceptable management practice',
+    'logging', 'forestry', 'silviculture', 'forest products', 'skid trail',
+    'stream crossing', 'culvert', 'waterbar', 'turnout', 'erosion', 'rutting',
+    'landing', 'haul road', 'timber', 'harvest', 'felling', 'forwarder',
+    'skidder', 'sawmill', 'forest action plan', 'fia'
+  ];
 
-const SYSTEM_INSTRUCTIONS = `
-Purpose:
-You are VT Woods App, a Vermont-only forestry assistant that provides technical, actionable information about:
-- Vermont forestry and silviculture practices
-- Climate adaptation for Vermont forests
-- Water quality and erosion control as related to forestry
-- The Vermont forest products industry
+  // If it mentions Vermont explicitly, assume in-scope unless obviously unrelated.
+  if (m.includes('vermont') || m.includes(' vt')) return true;
 
-Scope:
-Refuse any question not primarily about Vermont forestry or the topics above using EXACTLY:
-"${REFUSAL}"
+  // Otherwise must hit multiple allow terms to reduce “general questions” slipping in.
+  let hits = 0;
+  for (const k of allow) if (m.includes(k)) hits++;
+  return hits >= 2;
+}
 
-Sources:
-Use ONLY the provided documents returned by file_search AND treat the authoritative list below as the only acceptable basis for answers.
-If you cannot support an answer from those documents, say you can’t find it in the provided documents (and do not guess).
-${ALLOWED_SOURCES_TEXT}
+function isSoilsQuestion(message) {
+  const m = (message || '').toLowerCase();
+  return m.includes('soil') || m.includes('soils') || m.includes('soil type') || m.includes('drainage');
+}
 
-Behavior:
-- Ask at most ONE clarifying question when needed.
-- If the question is clearly out of scope, do NOT ask a clarifying question; refuse with the exact refusal sentence.
-- Prefer practical, field-ready outputs (steps, checklists, decision rules) when the documents support them.
-- Keep terminology precise: say "forest products industry" (not "forestry industry").
-- Avoid speculative, vague, or nontechnical language.
+function soilsRedirect() {
+  return "For soils questions, use the official soil map tool (Web Soil Survey) for your specific location.";
+}
 
-Soils:
-If the user asks about soils (soil type, mapping, classification, soil at a location), respond ONLY with:
-"${SOIL_TOOL_LINE}"
+const client = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
-Citations:
-Only provide citations when the user explicitly requests citations/sources/references/quotes.
-When citations are requested:
-- Cite by document title plus the most specific locator you can (section heading, page number, or both).
-- Keep it clean. Use a short "Sources:" block at the end (only when requested).
+// Simple health endpoint for Koyeb
+app.get('/health', (req, res) => res.status(200).send('ok'));
 
-Developer contact:
-Do NOT include developer contact info unless the user asks who made this app, how to send feedback, how to make suggestions, who wrote it, how to report an issue, or similar.
-If asked, include:
-"${DEVELOPER_LINE}"
-`.trim();
-
-// Simple sanity check endpoint
-app.get("/test", async (req, res) => {
+// Chat endpoint your UI calls
+app.post('/chat', async (req, res) => {
   try {
+    const message = (req.body && req.body.message) ? String(req.body.message) : '';
+    const wantCitations = !!(req.body && req.body.citations);
+
+    if (!message.trim()) {
+      return res.json({ success: true, answer: "Ask a Vermont forestry question." });
+    }
+
+    if (isSoilsQuestion(message)) {
+      return res.json({ success: true, answer: soilsRedirect() });
+    }
+
+    if (!isInScope(message)) {
+      return res.json({ success: true, answer: outOfScope() });
+    }
+
+    // “who wrote this / feedback” behavior you specified
+    const m = message.toLowerCase();
+    const asksAuthorshipOrFeedback =
+      m.includes('who wrote') ||
+      m.includes('who made') ||
+      m.includes('who built') ||
+      m.includes('feedback') ||
+      m.includes('suggestion') ||
+      m.includes('feature request') ||
+      m.includes('contact') ||
+      m.includes('email');
+
+    if (asksAuthorshipOrFeedback) {
+      return res.json({
+        success: true,
+        answer: "Please contact the developer with your questions or feedback (steve@northeastforests.com)."
+      });
+    }
+
+    if (!client) {
+      return res.status(500).json({
+        success: false,
+        error: "Server is missing OPENAI_API_KEY. Set it in Koyeb environment variables."
+      });
+    }
+    if (!VECTOR_STORE_ID) {
+      return res.status(500).json({
+        success: false,
+        error: "Server is missing VECTOR_STORE_ID. Set it in Koyeb environment variables."
+      });
+    }
+
+    // Use Responses API + file_search tool with your vector store.
+    // (This keeps answers grounded in your uploaded PDFs.)
+    const instructions = [
+      "You are the VT Woods App.",
+      "You answer only Vermont forestry and Vermont forest products industry questions, using ONLY the provided documents in the vector store.",
+      "If the user asks anything out of scope, respond with exactly: “Your request is beyond the scope and purpose of this app.”",
+      "Use precise terminology. Say “forest products industry” (not “forestry industry”).",
+      "Avoid speculation. Provide practical, field-ready steps/checklists when supported by the documents.",
+      "Ask at most one clarifying question if needed.",
+      "Only provide citations if the user explicitly requests them.",
+      "If citations are requested, cite document title and page/section when possible."
+    ].join("\n");
+
     const response = await client.responses.create({
-      model: "gpt-5",
-      input: "Reply with exactly these words: API key working.",
-    });
-    res.json({ success: true, output: response.output_text });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err?.message || String(err) });
-  }
-});
-
-app.post("/chat", async (req, res) => {
-  const message = req.body?.message;
-
-  if (!message || typeof message !== "string") {
-    return res
-      .status(400)
-      .json({ error: "Missing message (string) in JSON body." });
-  }
-
-  // Explicit citations trigger (tight on purpose)
-  const citationRequested =
-    /\b(cite|citations|citation|sources|source|references|reference|quote|quoted)\b/i.test(
-      message
-    );
-
-  // Developer/feedback/attribution trigger (only then include developer line)
-  const developerInfoRequested =
-    /\b(feedback|suggestion|suggestions|who (made|built|created|wrote)|developer|maintainer|contact|email|how do i (send|give) feedback|how do i report|report (a )?(bug|issue)|make a suggestion|feature request)\b/i.test(
-      message
-    );
-
-  // Soil question trigger (enforce hard redirect)
-  const soilAsked =
-    /\bsoil\b|\bsoils\b|\bsoil map\b|\bsoil type\b|\bsoil classification\b|\bWeb Soil Survey\b|\bNRCS\b/i.test(
-      message
-    );
-
-  if (soilAsked) {
-    // Soil response must be ONLY the soil tool line (plus developer line only if asked)
-    const answer = developerInfoRequested
-      ? `${SOIL_TOOL_LINE}\n\n${DEVELOPER_LINE}`
-      : SOIL_TOOL_LINE;
-    return res.json({ answer });
-  }
-
-  const citationModeNote = citationRequested
-    ? `User explicitly requested citations. Include a short "Sources:" block with document titles and section/page locators.`
-    : `User did not explicitly request citations. Do NOT include citations, sources, references, quotes, or a "Sources:" block.`;
-
-  const developerModeNote = developerInfoRequested
-    ? `User asked about the app/developer/feedback. Include this sentence somewhere appropriate in your reply: "${DEVELOPER_LINE}"`
-    : `Do NOT include developer contact info unless the user asked for it.`;
-
-  try {
-    const response = await client.responses.create({
-      model: "gpt-5",
+      model: 'gpt-4.1-mini',
       input: [
-        { role: "system", content: SYSTEM_INSTRUCTIONS },
-        { role: "system", content: citationModeNote },
-        { role: "system", content: developerModeNote },
-        { role: "user", content: message },
+        { role: 'system', content: instructions },
+        { role: 'user', content: message }
       ],
-      tools: [
-        {
-          type: "file_search",
-          vector_store_ids: [VECTOR_STORE_ID],
-        },
-      ],
+      tools: [{
+        type: "file_search",
+        vector_store_ids: [VECTOR_STORE_ID]
+      }],
     });
 
-    let text = (response.output_text || "").trim();
+    // Extract text
+    let answerText = '';
+    if (response.output && Array.isArray(response.output)) {
+      for (const item of response.output) {
+        if (item.type === 'message' && item.content) {
+          for (const c of item.content) {
+            if (c.type === 'output_text') answerText += c.text;
+          }
+        }
+      }
+    }
+    answerText = answerText.trim() || "No answer returned.";
 
-    // Enforce exact refusal behavior
-    if (text === REFUSAL) {
-      return res.json({ answer: text });
+    // Citations only if requested
+    let citations = [];
+    if (wantCitations) {
+      // Newer responses can contain annotations; keep this simple:
+      // Return whatever the API gives us in a safe envelope.
+      citations = response.output?.[0]?.content?.[0]?.annotations || [];
     }
 
-    // If user asked for developer info but the model forgot, append it.
-    if (developerInfoRequested && !text.includes("steve@northeastforests.com")) {
-      text = `${text}\n\n${DEVELOPER_LINE}`;
-    }
-
-    res.json({ answer: text });
+    return res.json({
+      success: true,
+      answer: answerText,
+      citations: wantCitations ? citations : undefined
+    });
   } catch (err) {
-    res.status(500).json({ error: err?.message || String(err) });
+    return res.status(500).json({
+      success: false,
+      error: String(err && err.message ? err.message : err)
+    });
   }
 });
 
-// REQUIRED for deployment: hosts provide PORT; fall back to 3000 locally
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+// IMPORTANT: Listen on PORT (Koyeb injects this); never hardcode 3000 on hosting.
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
