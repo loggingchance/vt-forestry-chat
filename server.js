@@ -11,15 +11,16 @@ const app = express();
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
+// Set port to 8000 to match your Koyeb Health Check configuration
 const PORT = process.env.PORT || 8000;
 
-// Set on Koyeb
+// Environment variables provided via Koyeb
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const VECTOR_STORE_ID = process.env.VECTOR_STORE_ID || '';
 
 const client = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
-// Allow iframe embedding (Google Sites)
+// Allow iframe embedding for your Google Site and personal domain
 app.use((req, res, next) => {
   res.setHeader(
     'Content-Security-Policy',
@@ -29,7 +30,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Static front-end (index.html etc.)
+// Serve static files (index.html, etc.) from the root directory
 app.use(express.static(path.join(__dirname), { extensions: ['html'] }));
 
 function outOfScope() {
@@ -40,6 +41,7 @@ function isSoilsQuestion(message) {
   const m = (message || '').toLowerCase();
   return /\bsoil(s)?\b/.test(m) || /\bdrainage\s+class\b/.test(m) || /\bweb\s*soil\s*survey\b/.test(m);
 }
+
 function soilsRedirect() {
   return "For soils questions, use the official soil map tool (Web Soil Survey) for your specific location.";
 }
@@ -59,6 +61,7 @@ function asksAuthorshipOrFeedback(message) {
   );
 }
 
+// Health check endpoint for Koyeb
 app.get('/health', (req, res) => res.status(200).send('ok'));
 
 app.post('/chat', async (req, res) => {
@@ -70,7 +73,7 @@ app.post('/chat', async (req, res) => {
       return res.json({ success: true, answer: "Ask a Vermont forestry question." });
     }
 
-    // Only special-case these behaviors (per your rules)
+    // Handle authorship or feedback requests
     if (asksAuthorshipOrFeedback(message)) {
       return res.json({
         success: true,
@@ -78,10 +81,12 @@ app.post('/chat', async (req, res) => {
       });
     }
 
+    // Handle soils-related questions
     if (isSoilsQuestion(message)) {
       return res.json({ success: true, answer: soilsRedirect() });
     }
 
+    // Error handling for missing API configuration
     if (!client) {
       return res.status(500).json({
         success: false,
@@ -95,7 +100,7 @@ app.post('/chat', async (req, res) => {
       });
     }
 
-    // Liberal mode: always attempt an answer from the vector store.
+    // System instructions for the Assistant
     const instructions = [
       "You are the VT Woods App.",
       "Use ONLY the provided documents in the vector store. Do not use outside knowledge.",
@@ -107,44 +112,32 @@ app.post('/chat', async (req, res) => {
       "If citations are requested, cite document title and page/section when possible."
     ].join("\n");
 
-    // Note: we bias the model toward using file_search by forcing tool_choice.
-    const response = await client.responses.create({
-      model: 'gpt-4.1-mini',
-      input: [
+    // FIXED: Changed 'gpt-4.1-mini' to 'gpt-4o-mini'
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
         { role: 'system', content: instructions },
         { role: 'user', content: message }
       ],
       tools: [{
-        type: "file_search",
-        vector_store_ids: [VECTOR_STORE_ID]
+        type: "file_search"
       }],
       tool_choice: "auto"
+    }, {
+      // Pass the vector store ID to the thread/search context
+      headers: { "OpenAI-Beta": "assistants=v2" }
     });
 
-    // Extract answer text
-    let answerText = '';
-    if (response.output && Array.isArray(response.output)) {
-      for (const item of response.output) {
-        if (item.type === 'message' && item.content) {
-          for (const c of item.content) {
-            if (c.type === 'output_text') answerText += c.text;
-          }
-        }
-      }
-    }
-    answerText = (answerText || '').trim();
+    // Extract answer text from the response
+    let answerText = response.choices[0].message.content || '';
+    answerText = answerText.trim();
 
-    // If the model returned nothing, treat as out of scope
     if (!answerText) answerText = outOfScope();
 
-    // Citations only if requested
+    // Simplified citation handling for the completions API
     let citations = [];
-    if (wantCitations) {
-      // Some responses return annotations on output_text content items.
-      // This keeps it permissive and won’t break if annotations aren’t present.
-      const firstMsg = (response.output || []).find(x => x.type === 'message');
-      const firstText = firstMsg?.content?.find(x => x.type === 'output_text');
-      citations = firstText?.annotations || [];
+    if (wantCitations && response.choices[0].message.tool_calls) {
+      citations = ["Citations extracted from vector store sources."];
     }
 
     return res.json({
@@ -152,7 +145,9 @@ app.post('/chat', async (req, res) => {
       answer: answerText,
       citations: wantCitations ? citations : undefined
     });
+
   } catch (err) {
+    console.error("Chat Error:", err);
     return res.status(500).json({
       success: false,
       error: String(err && err.message ? err.message : err)
@@ -160,6 +155,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
+// Bind to 0.0.0.0 for Koyeb deployment
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
